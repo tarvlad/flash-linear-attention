@@ -17,7 +17,7 @@ def bwd_kernel_preprocess(o, do, delta, B: tl.constexpr, V: tl.constexpr):
 
 @triton.jit
 def bwd_kernel_dq(
-    q, k, v, lse, delta, do, dq,
+    q, k, v, lse, delta, do, dq, dummy,
     scale, T,
     W: tl.constexpr,
     B: tl.constexpr, H: tl.constexpr, HQ: tl.constexpr, G: tl.constexpr,
@@ -57,7 +57,8 @@ def bwd_kernel_dq(
         b_k = tl.load(p_k, boundary_check=(0, 1))
         b_v = tl.load(p_v, boundary_check=(0, 1))
         b_s = tl.dot(b_q, b_k) * scale * RCP_LN2
-        b_p = tl.where(causal, tl.math.exp2(b_s - b_ls[:, None]), 0.0)
+        b_p = tl.math.exp2(b_s - b_ls[:, None]) * causal.to(tl.float32)
+        tl.store(dummy + 0, tl.sum(b_p))
         b_dp = tl.dot(b_do, b_v)
         b_ds = b_p * (b_dp.to(tl.float32) - b_dt[:, None])
         b_dq += tl.dot(b_ds.to(b_k.dtype), tl.trans(b_k))
@@ -105,10 +106,11 @@ ds = ds.masked_fill(~mask, 0.)
 dq_torch = (scale * (ds @ k_f)).unsqueeze(2)
 
 grid = (triton.cdiv(D, BV), triton.cdiv(T, BT), B * HQ)
+dummy = torch.zeros(1, dtype=torch.float32, device=device)
 
 dq_triton = torch.empty(B, T, HQ, D, dtype=torch.float, device=device)
 bwd_kernel_dq[grid](
-    q, k, v, lse_b2, delta, do, dq_triton,
+    q, k, v, lse_b2, delta, do, dq_triton, dummy,
     scale, T, W=None,
     B=B, H=H, HQ=HQ, G=G, K=D, V=D,
     BT=BT, BS=BS, BK=BK, BV=BV,
