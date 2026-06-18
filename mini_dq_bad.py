@@ -53,13 +53,13 @@ def bwd_kernel_dq(
         p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (V, T), (1, H*V), (i_v * BV, i_s), (BV, BS), (0, 1))
         o_k = i_s + tl.arange(0, BS)
         m_k = o_k < T
+        causal = (o_q[:, None] >= o_k[None, :]) & m_k[None, :]
         b_k = tl.load(p_k, boundary_check=(0, 1))
         b_v = tl.load(p_v, boundary_check=(0, 1))
         b_s = tl.dot(b_q, b_k) * scale * RCP_LN2
-        b_p = tl.math.exp2(b_s - b_ls[:, None])
+        b_p = tl.math.exp2(b_s - b_ls[:, None]) * causal.to(tl.float32)
         b_dp = tl.dot(b_do, b_v)
         b_ds = b_p * (b_dp.to(tl.float32) - b_dt[:, None])
-        b_ds = tl.where((o_q[:, None] >= o_k[None, :]) & m_k[None, :], b_ds, 0.0)
         b_dq += tl.dot(b_ds.to(b_k.dtype), tl.trans(b_k))
 
     b_dq *= scale

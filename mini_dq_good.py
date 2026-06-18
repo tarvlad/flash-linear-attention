@@ -17,7 +17,7 @@ def bwd_kernel_preprocess(o, do, delta, B: tl.constexpr, V: tl.constexpr):
 
 @triton.jit
 def bwd_kernel_dq(
-    q, k, v, lse, delta, do, dq, p_noise,
+    q, k, v, lse, delta, do, dq,
     scale, T,
     W: tl.constexpr,
     B: tl.constexpr, H: tl.constexpr, HQ: tl.constexpr, G: tl.constexpr,
@@ -51,17 +51,15 @@ def bwd_kernel_dq(
     for i_s in range(0, tl.minimum((i_t + 1) * BT, T), BS):
         p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (K, T), (1, H*K), (0, i_s),        (BK, BS), (0, 1))
         p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (V, T), (1, H*V), (i_v * BV, i_s), (BV, BS), (0, 1))
-        p_n = tl.make_block_ptr(p_noise + i_bh * T * T, (T, T), (T, 1), (i_t * BT, i_s), (BT, BS), (1, 0))
         o_k = i_s + tl.arange(0, BS)
         m_k = o_k < T
+        causal = (o_q[:, None] >= o_k[None, :]) & m_k[None, :]
         b_k = tl.load(p_k, boundary_check=(0, 1))
         b_v = tl.load(p_v, boundary_check=(0, 1))
         b_s = tl.dot(b_q, b_k) * scale * RCP_LN2
-        b_p = tl.math.exp2(b_s - b_ls[:, None])
-        tl.store(p_n, b_p, boundary_check=(0, 1))
+        b_p = tl.where(causal, tl.math.exp2(b_s - b_ls[:, None]), 0.0)
         b_dp = tl.dot(b_do, b_v)
         b_ds = b_p * (b_dp.to(tl.float32) - b_dt[:, None])
-        b_ds = tl.where((o_q[:, None] >= o_k[None, :]) & m_k[None, :], b_ds, 0.0)
         b_dq += tl.dot(b_ds.to(b_k.dtype), tl.trans(b_k))
 
     b_dq *= scale
@@ -107,11 +105,10 @@ ds = ds.masked_fill(~mask, 0.)
 dq_torch = (scale * (ds @ k_f)).unsqueeze(2)
 
 grid = (triton.cdiv(D, BV), triton.cdiv(T, BT), B * HQ)
-p_noise = torch.empty(B * HQ, T, T, dtype=torch.float32, device=device)
 
 dq_triton = torch.empty(B, T, HQ, D, dtype=torch.float, device=device)
 bwd_kernel_dq[grid](
-    q, k, v, lse_b2, delta, do, dq_triton, p_noise,
+    q, k, v, lse_b2, delta, do, dq_triton,
     scale, T, W=None,
     B=B, H=H, HQ=HQ, G=G, K=D, V=D,
     BT=BT, BS=BS, BK=BK, BV=BV,
