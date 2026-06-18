@@ -48,20 +48,7 @@ def bwd_kernel_dq(
     b_dq = tl.zeros([BT, BK], dtype=tl.float32)
     o_q = i_t * BT + tl.arange(0, BT)
 
-    for i_s in range(0, i_t * BT, BS):
-        p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (K, T), (1, H*K), (0, i_s),        (BK, BS), (0, 1))
-        p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (V, T), (1, H*V), (i_v * BV, i_s), (BV, BS), (0, 1))
-        p_n = tl.make_block_ptr(p_noise + i_bh * T * T, (T, T), (T, 1), (i_t * BT, i_s), (BT, BS), (1, 0))
-        b_k = tl.load(p_k, boundary_check=(0, 1))
-        b_v = tl.load(p_v, boundary_check=(0, 1))
-        b_s = tl.dot(b_q, b_k) * scale * RCP_LN2
-        b_p = tl.math.exp2(b_s - b_ls[:, None])
-        tl.store(p_n, b_p, boundary_check=(0, 1))
-        b_dp = tl.dot(b_do, b_v)
-        b_ds = b_p * (b_dp.to(tl.float32) - b_dt[:, None])
-        b_dq += tl.dot(b_ds.to(b_k.dtype), tl.trans(b_k))
-
-    for i_s in range(i_t * BT, tl.minimum((i_t + 1) * BT, T), BS):
+    for i_s in range(0, tl.minimum((i_t + 1) * BT, T), BS):
         p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (K, T), (1, H*K), (0, i_s),        (BK, BS), (0, 1))
         p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (V, T), (1, H*V), (i_v * BV, i_s), (BV, BS), (0, 1))
         p_n = tl.make_block_ptr(p_noise + i_bh * T * T, (T, T), (T, 1), (i_t * BT, i_s), (BT, BS), (1, 0))
